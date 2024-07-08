@@ -1,0 +1,210 @@
+#include "opencv2/opencv.hpp" // 引入 OpenCV 函式庫
+#include <iostream> // 引入 C++ 輸入輸出流函式庫
+#include <time.h> // 引入時間函式庫
+
+using namespace cv; // 使用 OpenCV 命名空間
+using namespace std; // 使用標準命名空間
+
+/* 自訂函式 */
+void detectAndDisplay(void); // 宣告偵測人臉的函式
+
+/* 全域變數 */
+String face_cascade_name = "data/haarcascade_frontalface_alt.xml"; // 正面人臉哈爾階層式分類器的檔案名稱
+String eyes_cascade_name = "data/haarcascade_eye_tree_eyeglasses.xml"; // 人眼哈爾階層式分類器的檔案名稱
+
+CascadeClassifier face_cascade; // 建立正面人臉哈爾階層式分類器物件
+CascadeClassifier eyes_cascade; // 建立人眼哈爾階層式分類器物件
+
+Mat im; // 輸入影像
+int option = 5; // 特效選項
+VideoCapture cap1("data/sleepy.mp4"); // 建立人臉視訊物件
+VideoCapture cap2("data/explosion.mp4"); // 建立爆破視訊物件
+Point eye_centers[2]; // 雙眼中心的(x,y)位置
+int explosion_frame = 0; // 爆破視訊影格編號
+bool explosion_on = false; // 爆破視訊是否啟動，初始值為"否"
+Point explosion_center;
+
+// 定義滑鼠反應函式
+static void mouse_callback(int event, int x, int y, int, void*) {
+    // 當滑鼠按下左鍵，根據點選位置，得到選項 (option) 數值 
+    if (event == EVENT_LBUTTONDOWN) {
+        if (y > im.rows - 50) {
+            if (x < 100) option = 1; // 綠色
+            else if (x < 200) option = 2; // 瘦臉 
+            else if (x < 300) option = 3; // 馬賽克
+            else option = 4; // 其他選項
+        }
+        else {
+            // 點擊其他區域啟動爆破視訊
+            option = 4;
+            explosion_on = true;
+            explosion_frame = 0;
+            explosion_center = Point(x, y);
+        }
+    }
+}
+
+/** 主程式 */
+int main(void) {
+    if (!cap1.isOpened()) { // 若無法開啟人臉視訊，顯示錯誤訊息
+        printf("--(!)Error loading video/camera\n");
+        waitKey(0);
+        return -1;
+    }
+
+    // 載入人臉與人眼分類器的參數
+    if (!face_cascade.load(face_cascade_name)) {
+        printf("--(!)Error loading face cascade\n"); // 若無法載入正面人臉哈爾階層式分類器，顯示錯誤訊息
+        waitKey(0);
+        return -1;
+    }
+    if (!eyes_cascade.load(eyes_cascade_name)) {
+        printf("--(!)Error loading eyes cascade\n"); // 若無法載入人眼哈爾階層式分類器，顯示錯誤訊息
+        waitKey(0);
+        return -1;
+    }
+
+    namedWindow("window");
+    setMouseCallback("window", mouse_callback);
+
+    while (char(waitKey(1)) != 27 && cap1.isOpened()) { // 當按鍵不是 Esc 且人臉視訊物件仍在開啟時，持續執行迴圈
+        cap1 >> im; // 抓取視訊的畫面
+        if (im.empty()) { // 如果沒有抓到畫面
+            printf(" --(!) No captured im -- Break!"); // 顯示錯誤訊息
+            break;
+        }
+        /* 偵測人臉，並顯示特效影像 */
+        detectAndDisplay();
+    }
+    return 0;
+}
+
+/** detectAndDisplay 函式內容 */
+void detectAndDisplay(void) {
+    /** 人臉偵測前處理 */
+    vector<Rect> faces; // 儲存人臉 ROI 區域的向量
+    Mat im_gray; // 灰階影像物件
+
+    // 彩色影像轉灰階
+    cvtColor(im, im_gray, COLOR_BGR2GRAY);
+    // 對灰階圖像進行直方圖均衡化，增加對比度
+    equalizeHist(im_gray, im_gray);
+
+    // 檢測正面人臉
+    face_cascade.detectMultiScale(im_gray, faces, 1.1, 4, 0, Size(80, 80));
+
+    /** 如果有偵測到人臉，執行以下敘述 */
+    if (faces.size() > 0) {
+        // 找出最大的人臉 ROI 區域
+        Rect faceROI = faces[0];
+        for (size_t i = 1; i < faces.size(); ++i) {
+            if (faces[i].area() > faceROI.area()) {
+                faceROI = faces[i];
+            }
+        }
+
+        // 稍微擴大人臉 ROI，以確保覆蓋整個人臉
+        faceROI.x = max(faceROI.x - 10, 0);
+        faceROI.y = max(faceROI.y - 10, 0);
+        faceROI.width = min(faceROI.width + 20, im.cols - faceROI.x);
+        faceROI.height = min(faceROI.height + 20, im.rows - faceROI.y);
+
+        // 偵測人眼位置
+        Mat faceROI_gray = im_gray(faceROI);
+        vector<Rect> eyes;
+        eyes_cascade.detectMultiScale(faceROI_gray, eyes, 1.1, 2, 0, Size(30, 30));
+        if (eyes.size() == 2) {
+            eye_centers[0] = Point(faceROI.x + eyes[0].x + eyes[0].width / 2, faceROI.y + eyes[0].y + eyes[0].height / 2);
+            eye_centers[1] = Point(faceROI.x + eyes[1].x + eyes[1].width / 2, faceROI.y + eyes[1].y + eyes[1].height / 2);
+        }
+        else {
+            eye_centers[0] = Point(faceROI.x + faceROI.width / 3, faceROI.y + faceROI.height / 3);
+            eye_centers[1] = Point(faceROI.x + 2 * faceROI.width / 3, faceROI.y + faceROI.height / 3);
+        }
+
+        // 顯示特效選項
+        putText(im, "Green", Point(10, im.rows - 20), FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 0, 0), 2);
+        putText(im, "Green", Point(10, im.rows - 22), FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 255, 0), 2);
+        putText(im, "Slim", Point(110, im.rows - 20), FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 0, 0), 2);
+        putText(im, "Slim", Point(110, im.rows - 22), FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 255, 0), 2);
+        putText(im, "Mosaic", Point(210, im.rows - 20), FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 0, 0), 2);
+        putText(im, "Mosaic", Point(210, im.rows - 22), FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 255, 0), 2);
+
+        // 根據選項處理 ROI 影像
+        // 選項1: 綠色
+        if (option == 1) {
+            Mat im_face = im(faceROI);
+            Mat im_hsv, mask;
+
+            // 轉換到HSV色彩空間
+            cvtColor(im_face, im_hsv, COLOR_BGR2HSV);
+
+            // 找到皮膚色的範圍，並創建掩碼
+            inRange(im_hsv, Scalar(0, 30, 40), Scalar(50, 180, 250), mask);
+
+            // 進行侵蝕操作，以增強皮膚色區域
+            erode(mask, mask, Mat(), Point(-1, -1), 2);
+
+            // 只針對HSV色彩空間的第一個通道進行調整
+            for (int i = 0; i < im_hsv.rows; i++) {
+                for (int j = 0; j < im_hsv.cols; j++) {
+                    if (mask.at<uchar>(i, j) > 0) {
+                        im_hsv.at<Vec3b>(i, j)[0] = 60; // 將皮膚色改為綠色
+                    }
+                }
+            }
+
+            // 最終轉回至RGB色彩空間
+            cvtColor(im_hsv, im_face, COLOR_HSV2BGR);
+
+            // 將處理後的臉部區域影像複製回原影像
+            im_face.copyTo(im(faceROI), mask);
+        }
+        // 選項2: 瘦臉
+        else if (option == 2) {
+            Mat im_face = im(faceROI);
+            Mat map_x, map_y;
+            map_x.create(im_face.size(), CV_32FC1);
+            map_y.create(im_face.size(), CV_32FC1);
+            for (int i = 0; i < im_face.rows; ++i) {
+                for (int j = 0; j < im_face.cols; ++j) {
+                    map_x.at<float>(i, j) = j;
+                    map_y.at<float>(i, j) = i - (i - im_face.rows / 2) * (0.1 * exp(-pow((double)j / im_face.cols - 0.5, 2) / 0.08));
+                }
+            }
+            remap(im_face, im_face, map_x, map_y, INTER_LINEAR);
+        }
+        // 選項3: 馬賽克
+        else if (option == 3) {
+            Mat im_face = im(faceROI);
+            Mat small_face;
+            resize(im_face, small_face, Size(), 0.1, 0.1, INTER_NEAREST);
+            resize(small_face, im_face, im_face.size(), 0, 0, INTER_NEAREST);
+        }
+        // 其他選項：雷射眼
+        else if (option == 4 && explosion_on) {
+            if (explosion_on) {
+                Mat explosion;
+                cap2 >> explosion;
+                if (explosion.empty()) {
+                    explosion_on = false;
+                    cap2.set(CAP_PROP_POS_FRAMES, 0);
+                }
+                else {
+                    Mat mask;
+                    resize(explosion, explosion, Size(), 0.2, 0.2);
+                    threshold(explosion, mask, 50, 255, THRESH_BINARY);
+                    int x = explosion_center.x - explosion.cols / 2;
+                    int y = explosion_center.y - explosion.rows / 2;
+                    Mat roi = im(Rect(max(x, 0), max(y, 0), explosion.cols, explosion.rows));
+                    explosion.copyTo(roi, mask);
+                }
+            }
+        }
+        // 繪製人臉區域矩形框，以及上方的學號
+        rectangle(im, faceROI, Scalar(0, 255, 0), 2);
+        putText(im, "M11202125", Point(faceROI.x, faceROI.y - 10), FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 255, 0), 2);
+    }
+    /* 顯示影像 */
+    imshow("window", im);
+}
